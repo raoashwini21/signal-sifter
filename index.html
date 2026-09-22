@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Signal Sifter — Auto</title>
+<meta name="description" content="Paste a batch of brand mentions. Jev sorts real signal from coincidental word-match noise, and pushes the real ones to Slack automatically.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0A0E0C;
+    --panel:#0F1512;
+    --ink:#D8F5E3;
+    --ink-dim:#5C7A6A;
+    --line:#1E2B24;
+    --signal:#39FF88;
+    --signal-dim:#173323;
+    --noise:#3D5548;
+    --warn:#FF6B5E;
+    --warn-dim:#2A1613;
+  }
+  :root[data-theme="light"]{
+    --bg:#F3F6F3; --panel:#FFFFFF; --ink:#0F1F17; --ink-dim:#5C7A6A;
+    --line:#D3E0D8; --signal:#0E9A54; --signal-dim:#DFF5E9; --noise:#9CACA3; --warn:#C43D2E; --warn-dim:#FCE7E4;
+  }
+
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--bg); color:var(--ink);
+    font-family:'JetBrains Mono', ui-monospace, monospace;
+    padding:0 0 60px;
+    background-image:
+      linear-gradient(var(--line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--line) 1px, transparent 1px);
+    background-size: 28px 28px;
+    background-attachment: fixed;
+  }
+  .wrap{max-width:600px;margin:0 auto;padding:0 16px;}
+
+  .topbar{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:16px 0;border-bottom:1px solid var(--line);margin-bottom:28px;
+  }
+  .brand{display:flex;align-items:center;gap:9px;font-size:13px;font-weight:700;letter-spacing:0.02em;}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--signal);box-shadow:0 0 8px var(--signal);animation:blink 1.6s ease-in-out infinite;}
+  @keyframes blink{0%,100%{opacity:1;}50%{opacity:0.25;}}
+  .powered{font-size:10.5px;color:var(--ink-dim);}
+
+  h1{
+    font-size:clamp(22px,5vw,28px);font-weight:800;line-height:1.25;margin:0 0 14px;
+    letter-spacing:-0.01em;
+  }
+  h1 .cursor{display:inline-block;width:9px;height:1.1em;background:var(--signal);margin-left:4px;vertical-align:text-bottom;animation:blink 1s step-end infinite;}
+
+  .usecase{
+    border:1px solid var(--line);border-left:3px solid var(--signal);
+    background:var(--panel);border-radius:2px;padding:14px 16px;margin-bottom:18px;
+  }
+  .usecase p{margin:0;font-family:system-ui,sans-serif;}
+  .usecase .big{font-size:16px;font-weight:700;line-height:1.4;color:var(--ink);margin-bottom:8px;}
+  .usecase .small{font-size:12px;line-height:1.6;color:var(--ink-dim);}
+
+  .auto-note{
+    display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--signal);
+    background:var(--signal-dim);border:1px dashed var(--signal);border-radius:2px;
+    padding:10px 12px;margin-bottom:28px;
+  }
+  .auto-note .pulse{width:6px;height:6px;border-radius:50%;background:var(--signal);flex:none;animation:blink 1.2s ease-in-out infinite;}
+
+  label{
+    display:block;font-size:11px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;
+    color:var(--ink-dim);margin-bottom:7px;
+  }
+  .field{margin-bottom:20px;}
+  input[type="password"], input[type="text"], textarea{
+    width:100%;font-family:'JetBrains Mono',monospace;font-size:13.5px;color:var(--ink);
+    background:var(--panel);border:1px solid var(--line);border-radius:2px;padding:11px 13px;
+    resize:vertical;line-height:1.55;
+  }
+  input:focus, textarea:focus{outline:none;border-color:var(--signal);}
+  input::placeholder, textarea::placeholder{color:var(--ink-dim);opacity:0.6;}
+  textarea#snippets{min-height:150px;}
+  .key-row{display:flex;gap:8px;}
+  .key-row input{flex:1;}
+  .link-btn{
+    font-family:'JetBrains Mono',monospace;font-size:11.5px;font-weight:700;letter-spacing:0.03em;
+    background:none;border:1px solid var(--line);color:var(--ink-dim);
+    padding:0 14px;border-radius:2px;cursor:pointer;white-space:nowrap;text-transform:uppercase;
+  }
+  .link-btn:hover{border-color:var(--signal);color:var(--signal);}
+  .hint{font-size:11.5px;color:var(--ink-dim);margin-top:7px;line-height:1.6;}
+  .hint a{color:var(--signal);}
+
+  .run-btn{
+    width:100%;font-family:'JetBrains Mono',monospace;font-size:13.5px;font-weight:800;letter-spacing:0.04em;text-transform:uppercase;
+    background:var(--signal);color:#031B0E;border:none;border-radius:2px;padding:15px;
+    cursor:pointer;margin-top:8px;display:flex;align-items:center;justify-content:center;gap:9px;
+  }
+  .run-btn:disabled{opacity:0.5;cursor:default;}
+  .spinner{width:12px;height:12px;border-radius:50%;border:2px solid rgba(3,27,14,0.35);border-top-color:#031B0E;animation:spin 0.7s linear infinite;display:none;}
+  .run-btn.loading .spinner{display:inline-block;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+  .status-line{font-size:11.5px;color:var(--signal);text-align:center;margin-top:12px;display:none;}
+  .status-line.show{display:block;}
+  .status-line::before{content:'> ';}
+
+  .error-box{
+    display:none;background:var(--warn-dim);border:1px solid var(--warn);color:var(--warn);
+    border-radius:2px;padding:13px 15px;font-size:12.5px;line-height:1.6;margin-top:16px;
+  }
+  .error-box pre{background:rgba(0,0,0,0.25);padding:9px;border-radius:2px;overflow-x:auto;font-size:11px;margin:9px 0 0;white-space:pre-wrap;word-break:break-word;}
+
+  #results{display:none;margin-top:36px;}
+  #results.show{display:block;}
+  .results-summary{
+    font-size:12px;color:var(--ink-dim);margin-bottom:20px;padding-bottom:16px;border-bottom:1px dashed var(--line);
+  }
+  .results-summary b{color:var(--signal);}
+
+  .pile-label{font-size:10.5px;font-weight:800;letter-spacing:0.1em;text-transform:uppercase;color:var(--ink-dim);margin:22px 0 10px;display:flex;align-items:center;gap:8px;}
+  .pile-label::after{content:'';flex:1;height:1px;background:var(--line);}
+  .pile-label.signal{color:var(--signal);}
+
+  .mention-row{display:flex;gap:12px;align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--line);}
+  .mention-row:last-child{border-bottom:none;}
+  .mention-pct{flex:none;font-weight:800;font-size:12.5px;width:38px;}
+  .mention-row.signal .mention-pct{color:var(--signal);}
+  .mention-row.noise .mention-pct{color:var(--warn);}
+  .mention-text{flex:1;font-size:12.5px;line-height:1.6;min-width:0;font-family:system-ui,sans-serif;color:var(--ink);}
+  .mention-row.noise .mention-text{color:var(--ink-dim);}
+
+  .actions{display:flex;gap:10px;margin-top:22px;}
+  .actions button{flex:1;padding:11px;}
+
+  footer{margin-top:44px;padding-top:18px;border-top:1px solid var(--line);font-size:11px;color:var(--ink-dim);line-height:1.7;}
+  footer a{color:var(--signal);}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="topbar">
+    <div class="brand"><span class="dot"></span>SIGNAL SIFTER</div>
+    <div class="powered">powered by Jev</div>
+  </div>
+
+  <h1>Is that mention actually about you<span class="cursor"></span></h1>
+
+  <div class="usecase">
+    <p class="big">There are two companies called "Clay." Only one is yours.</p>
+    <p class="small">No pottery to give it away — you'd never know how many of your alerts are quietly about the wrong one.</p>
+  </div>
+
+  <div class="auto-note"><span class="pulse"></span>Wired to a live Google Alerts feed, this runs itself &mdash; checking every few hours, pinging Slack only for the real ones. You're testing that exact logic below.</div>
+
+  <div class="field">
+    <label>Your Jev API key</label>
+    <div class="key-row">
+      <input type="password" id="apiKey" placeholder="apikey_..." autocomplete="off" spellcheck="false">
+      <button class="link-btn" id="toggleKey" type="button">show</button>
+    </div>
+    <p class="hint">Passed through per-request, never stored. Get a key at <a href="https://console.typesafe.ai/settings/keys" target="_blank" rel="noopener">console.typesafe.ai</a>.</p>
+  </div>
+
+  <div class="field">
+    <label>What you're tracking</label>
+    <input type="text" id="topic" placeholder="e.g. Clay" value="Clay">
+  </div>
+
+  <div class="field">
+    <label>What it actually means</label>
+    <input type="text" id="context" placeholder="e.g. the GTM data enrichment tool, not the other Clay" value="the B2B data enrichment / outbound automation platform for sales teams &mdash; not the other Clay app, the personal relationship-manager for remembering friends' birthdays and staying in touch">
+  </div>
+
+  <div class="field">
+    <label>The mentions (one per line)</label>
+    <textarea id="snippets">Just started using Clay to keep up with friends' birthdays and life updates — way better than my notes app.
+Our outbound team plugged Clay into the CRM and cut list-building time in half.
+Clay just shipped a new integration with LinkedIn for personal contact syncing.
+We're scaling our GTM engine using Clay's enrichment waterfalls across five data providers.
+Clay raised a new round to grow their relationship intelligence platform for professionals.
+Finally automated our lead lists with Clay — no more manual scraping.</textarea>
+  </div>
+
+  <button class="run-btn" id="runBtn" type="button">
+    <span class="spinner"></span>
+    <span id="runBtnLabel">Run the sift</span>
+  </button>
+  <div class="status-line" id="statusLine">sending batch to the pipeline...</div>
+  <div class="error-box" id="errorBox"></div>
+
+  <div id="results">
+    <div class="results-summary" id="resultsSummary"></div>
+
+    <div class="pile-label signal">Real signal</div>
+    <div id="signalPile"></div>
+
+    <div class="pile-label">Noise</div>
+    <div id="noisePile"></div>
+
+    <div class="actions">
+      <button class="link-btn" id="copyBtn" type="button" style="flex:1;">copy real mentions</button>
+      <button class="link-btn" id="runAgainBtn" type="button" style="flex:1;">sift another batch</button>
+    </div>
+  </div>
+
+  <footer>Built on <a href="https://typesafe.ai" target="_blank" rel="noopener">TypeSafe's Jev</a>. Nothing you paste here is stored anywhere but your own browser. Real hits from this run get posted to a demo Slack channel so you can see the automation actually fire.</footer>
+
+</div>
+
+<script>
+(function(){
+  // Paste the "Demo Webhook (from page)" node's Production URL here after importing signal-sifter-auto.json into n8n.
+  const RELAY_URL = 'https://contentworkflows.app.n8n.cloud/webhook/signal-sifter-auto';
+  const MAX_SNIPPETS = 40;
+
+  const $ = (id) => document.getElementById(id);
+  const apiKeyEl = $('apiKey');
+  const toggleKeyBtn = $('toggleKey');
+  const topicEl = $('topic');
+  const contextEl = $('context');
+  const snippetsEl = $('snippets');
+  const runBtn = $('runBtn');
+  const runBtnLabel = $('runBtnLabel');
+  const statusLine = $('statusLine');
+  const errorBox = $('errorBox');
+  const resultsEl = $('results');
+  const resultsSummary = $('resultsSummary');
+  const signalPile = $('signalPile');
+  const noisePile = $('noisePile');
+  const copyBtn = $('copyBtn');
+  const runAgainBtn = $('runAgainBtn');
+
+  try{
+    const saved = localStorage.getItem('coldread_key');
+    if(saved){ apiKeyEl.value = saved; }
+  }catch(e){}
+
+  toggleKeyBtn.addEventListener('click', function(){
+    const isPw = apiKeyEl.type === 'password';
+    apiKeyEl.type = isPw ? 'text' : 'password';
+    toggleKeyBtn.textContent = isPw ? 'hide' : 'show';
+  });
+
+  function showError(title, detail, extra){
+    errorBox.innerHTML = '<strong>' + title + '</strong><br>' + detail + (extra ? '<pre>' + extra + '</pre>' : '');
+    errorBox.style.display = 'block';
+  }
+  function hideError(){ errorBox.style.display = 'none'; errorBox.innerHTML = ''; }
+
+  function escapeHtml(str){
+    return str.replace(/[&<>"']/g, function(ch){
+      return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[ch];
+    });
+  }
+
+  function renderResults(items){
+    const signal = items.filter(function(i){ return i.prob >= 0.5; }).sort(function(a,b){ return b.prob - a.prob; });
+    const noise = items.filter(function(i){ return i.prob < 0.5; }).sort(function(a,b){ return b.prob - a.prob; });
+
+    resultsSummary.innerHTML = '<b>' + signal.length + '</b> real &nbsp;/&nbsp; <b style="color:var(--warn)">' + noise.length + '</b> noise &nbsp;/&nbsp; ' + items.length + ' checked &mdash; real ones just got posted to Slack';
+
+    function rowHtml(item, isSignal){
+      return '<div class="mention-row ' + (isSignal ? 'signal' : 'noise') + '">' +
+        '<div class="mention-pct">' + Math.round(item.prob * 100) + '%</div>' +
+        '<div class="mention-text">' + escapeHtml(item.text) + '</div>' +
+      '</div>';
+    }
+
+    signalPile.innerHTML = signal.length ? signal.map(function(i){ return rowHtml(i, true); }).join('') : '<p class="hint">Nothing cleared the bar.</p>';
+    noisePile.innerHTML = noise.length ? noise.map(function(i){ return rowHtml(i, false); }).join('') : '<p class="hint">No noise caught.</p>';
+
+    resultsEl.classList.add('show');
+    resultsEl.style.display = 'block';
+    resultsEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+    resultsEl.dataset.shareText = signal.map(function(i){ return i.text; }).join('\n\n');
+  }
+
+  async function run(){
+    hideError();
+    resultsEl.classList.remove('show');
+    resultsEl.style.display = 'none';
+
+    const key = apiKeyEl.value.trim();
+    const topic = topicEl.value.trim();
+    const context = contextEl.value.trim();
+    const lines = snippetsEl.value.split('\n').map(function(l){ return l.trim(); }).filter(function(l){ return l.length > 0; }).slice(0, MAX_SNIPPETS);
+
+    if (!key){ showError('Missing API key', 'Paste your Jev key above first.'); return; }
+    if (!topic){ showError('Missing topic', 'Fill in what you\'re tracking.'); return; }
+    if (lines.length === 0){ showError('Nothing to sift', 'Paste at least one mention snippet.'); return; }
+
+    try{ localStorage.setItem('coldread_key', key); }catch(e){}
+
+    runBtn.disabled = true;
+    runBtn.classList.add('loading');
+    runBtnLabel.textContent = 'Sifting...';
+    statusLine.classList.add('show');
+
+    try{
+      const res = await fetch(RELAY_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ api_key: key, topic: topic, context: context, mentions: lines })
+      });
+      const text = await res.text();
+      let data;
+      try{ data = JSON.parse(text); }catch(e){ data = { raw: text }; }
+
+      runBtn.disabled = false;
+      runBtn.classList.remove('loading');
+      runBtnLabel.textContent = 'Run the sift';
+      statusLine.classList.remove('show');
+
+      if (!res.ok){
+        showError('Got an error back (' + res.status + ')', 'Check that your key is valid and the n8n automation workflow is active.', JSON.stringify(data, null, 2));
+        return;
+      }
+      if (!data || !Array.isArray(data.results)){
+        showError('Got a response but couldn\'t read the results', 'Raw response below.', JSON.stringify(data, null, 2));
+        return;
+      }
+
+      renderResults(data.results);
+    }catch(err){
+      runBtn.disabled = false;
+      runBtn.classList.remove('loading');
+      runBtnLabel.textContent = 'Run the sift';
+      statusLine.classList.remove('show');
+      showError('Could not reach the automation pipeline', 'Check that the n8n workflow is active and RELAY_URL is set correctly.');
+    }
+  }
+
+  runBtn.addEventListener('click', run);
+  runAgainBtn.addEventListener('click', function(){
+    resultsEl.classList.remove('show');
+    resultsEl.style.display = 'none';
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+
+  copyBtn.addEventListener('click', async function(){
+    const txt = resultsEl.dataset.shareText || '';
+    try{
+      await navigator.clipboard.writeText(txt || 'No real mentions to copy.');
+      copyBtn.textContent = 'copied';
+      setTimeout(function(){ copyBtn.textContent = 'copy real mentions'; }, 1500);
+    }catch(e){
+      showError('Could not copy', 'Select and copy the results manually.');
+    }
+  });
+})();
+</script>
+</body>
+</html>

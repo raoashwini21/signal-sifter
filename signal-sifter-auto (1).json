@@ -1,0 +1,257 @@
+{
+  "name": "Signal Sifter — Auto (Demo page + real Google Alerts pipeline)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "OPTIONS",
+        "path": "signal-sifter-auto",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "preflight-1",
+      "name": "Preflight (OPTIONS)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-620, 0]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "",
+        "options": {
+          "responseCode": 204,
+          "responseHeaders": {
+            "entries": [
+              { "name": "Access-Control-Allow-Origin", "value": "*" },
+              { "name": "Access-Control-Allow-Methods", "value": "POST, OPTIONS" },
+              { "name": "Access-Control-Allow-Headers", "value": "Content-Type" }
+            ]
+          }
+        }
+      },
+      "id": "respond-preflight-1",
+      "name": "Respond to Preflight",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [-380, 0]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "signal-sifter-auto",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "demo-webhook-1",
+      "name": "Demo Webhook (from page)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-620, 220],
+      "notes": "This is the URL the demo page calls. After activating, copy its Production URL into signal-sifter-auto.html's RELAY_URL constant."
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            { "field": "hours", "hoursInterval": 6 }
+          ]
+        }
+      },
+      "id": "schedule-1",
+      "name": "Every 6 Hours (Production)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-620, 460]
+    },
+    {
+      "parameters": {
+        "url": "PASTE_YOUR_GOOGLE_ALERTS_RSS_URL_HERE",
+        "options": {}
+      },
+      "id": "rss-read-1",
+      "name": "Read Google Alerts RSS",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1,
+      "position": [-380, 460],
+      "notes": "Set up a Google Alert for your keyword, choose 'RSS feed' as delivery, and paste that feed URL here."
+    },
+    {
+      "parameters": {
+        "operation": "removeItemsSeenInPreviousExecutions",
+        "compare": "selectedFields",
+        "fieldsToCompare": {
+          "values": [{ "fieldName": "link" }]
+        }
+      },
+      "id": "dedupe-1",
+      "name": "Skip Already-Seen Items",
+      "type": "n8n-nodes-base.removeDuplicates",
+      "typeVersion": 2,
+      "position": [-140, 460],
+      "notes": "Stops the same RSS item from being re-checked (and re-posted to Slack) every time the schedule runs. If this node errors or looks different after import, n8n changed its shape a bit across versions — just reconfigure it to compare on the 'link' field, or tell me and I'll swap in a Google-Sheet-based dedupe instead."
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst first = items[0] ? items[0].json : {};\n\n// ---- Branch A: triggered by the demo page (has a .body) ----\nif (first.body !== undefined) {\n  const body = first.body || {};\n  const apiKey = body.api_key || '';\n  const topic = body.topic || 'Clay';\n  const context = body.context || \"the B2B data enrichment / outbound automation platform for sales teams — not the other Clay app, the personal relationship-manager for remembering friends' birthdays and staying in touch\";\n  let mentions = body.mentions;\n  if (!Array.isArray(mentions) || mentions.length === 0) {\n    mentions = [\n      \"Just started using Clay to keep up with friends' birthdays and life updates — way better than my notes app.\",\n      \"Our outbound team plugged Clay into the CRM and cut list-building time in half.\",\n      \"Clay just shipped a new integration with LinkedIn for personal contact syncing.\",\n      \"We're scaling our GTM engine using Clay's enrichment waterfalls across five data providers.\",\n      \"Clay raised a new round to grow their relationship intelligence platform for professionals.\",\n      \"Finally automated our lead lists with Clay — no more manual scraping.\"\n    ];\n  }\n  return mentions.map(text => ({ json: { text, link: '', api_key: apiKey, topic, context } }));\n}\n\n// ---- Branch B: triggered by the schedule + RSS feed ----\n// EDIT these three lines for your own product before you rely on this branch:\nconst TOPIC = 'Clay';\nconst CONTEXT = \"the B2B data enrichment / outbound automation platform for sales teams — not the other Clay app, the personal relationship-manager for remembering friends' birthdays and staying in touch\";\nconst API_KEY = 'PASTE_YOUR_JEV_API_KEY_HERE'; // this branch runs unattended, so it needs a real stored key\n\nreturn items.map(item => ({\n  json: {\n    text: (item.json.title || '') + '. ' + (item.json.contentSnippet || item.json.content || ''),\n    link: item.json.link || '',\n    api_key: API_KEY,\n    topic: TOPIC,\n    context: CONTEXT\n  }\n}));"
+      },
+      "id": "prepare-items-1",
+      "name": "Prepare Items",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [140, 220],
+      "notes": "One node, two jobs: turns whatever the demo page sent into a clean list of mentions, OR (if it ran off the RSS branch) turns RSS entries into the same shape. Edit the TOPIC/CONTEXT/API_KEY lines in the 'Branch B' section for the unattended production path."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.typesafe.ai/v1/systemone",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $json.api_key }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  model: \"jev-latest\",\n  state: { message: $json.text },\n  questions: {\n    real_mention: {\n      type: \"noul\",\n      instructions: \"This text is genuinely about \\\"\" + $json.topic + \"\\\" as described here: \\\"\" + $json.context + \"\\\". It does not count if the word appears only as a coincidental match, a different meaning of the same word, or an unrelated use of the term.\"\n    }\n  }\n}) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": false,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "check-jev-1",
+      "name": "Check with Jev",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [380, 220]
+    },
+    {
+      "parameters": {
+        "jsCode": "function extractProb(v){\n  if (v == null) return null;\n  if (typeof v === 'number') return v;\n  if (typeof v === 'object'){\n    if (typeof v.noul === 'number') return v.noul;\n    if (typeof v.score === 'number') return v.score;\n    if (typeof v.confidence === 'number') return v.confidence;\n    if (typeof v.probability === 'number') return v.probability;\n  }\n  return null;\n}\n\nreturn $input.all().map((item, i) => {\n  const data = item.json;\n  const container = data.answers || data.questions || data.results || data;\n  const prob = extractProb(container ? container.real_mention : null);\n  const original = $('Prepare Items').all()[i].json;\n  return {\n    json: {\n      text: original.text,\n      link: original.link,\n      prob: prob === null ? 0 : prob\n    }\n  };\n});"
+      },
+      "id": "extract-prob-1",
+      "name": "Extract Prob",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [620, 220]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "cond-1",
+              "leftValue": "={{ $json.prob }}",
+              "rightValue": 0.5,
+              "operator": { "type": "number", "operation": "gte" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "is-signal-1",
+      "name": "Is Real Signal?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [860, 220]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": "#signal-sifter-demo",
+        "text": "=🔔 Real signal ({{ Math.round($json.prob * 100) }}%): {{ $json.text }}{{ $json.link ? '\\n' + $json.link : '' }}",
+        "otherOptions": {}
+      },
+      "id": "post-slack-1",
+      "name": "Post to Slack",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [1100, 100],
+      "notes": "Needs your own Slack credential connected (Credentials > New > Slack, a few clicks + one Slack authorize popup). Change #signal-sifter-demo to your real channel."
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineAll",
+        "options": {}
+      },
+      "id": "merge-1",
+      "name": "Merge",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1340, 220]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { results: $input.all().map(item => ({ text: item.json.text, prob: item.json.prob })) } }];"
+      },
+      "id": "build-response-1",
+      "name": "Build Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1580, 220]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              { "name": "Access-Control-Allow-Origin", "value": "*" },
+              { "name": "Content-Type", "value": "application/json" }
+            ]
+          }
+        }
+      },
+      "id": "respond-demo-1",
+      "name": "Respond to Page",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1820, 220],
+      "notes": "Only matters when a schedule run reaches here it just quietly does nothing (no webhook is waiting) — that's expected and harmless."
+    },
+    {
+      "parameters": {
+        "content": "## What this workflow does\nTwo entry points feed the SAME checking + Slack logic:\n\n1. **Demo Webhook** — the page's \"Run Demo Batch\" button posts here with a visitor's own key + mentions. Results come back to the page AND real ones get posted to Slack.\n2. **Every 6 Hours** — reads your real Google Alerts RSS feed, checks each new item, posts real ones to Slack. This is the actually-unattended part.\n\n## Setup, in order\n1. Import this file into n8n.\n2. Open 'Prepare Items', scroll to the 'Branch B' section, fill in TOPIC / CONTEXT / your real Jev API key (this one runs with no visitor, so it needs a real stored key here).\n3. Open 'Read Google Alerts RSS' — go create a Google Alert for your term, choose 'RSS feed' delivery, paste that feed URL in.\n4. Open 'Post to Slack' — connect your Slack credential, set the channel.\n5. Turn Settings > 'Save manual executions' OFF (same reason as the relay workflow — don't want visitor keys sitting in execution logs).\n6. Activate the workflow.\n7. Copy 'Demo Webhook (from page)' node's Production URL into signal-sifter-auto.html's RELAY_URL.\n\nThe demo webhook path needs no Slack/RSS setup to work for testing — only the schedule path (real production alerting) needs steps 2-4.",
+        "height": 480,
+        "width": 420
+      },
+      "id": "sticky-1",
+      "name": "Setup Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-980, -80]
+    }
+  ],
+  "connections": {
+    "Preflight (OPTIONS)": { "main": [[{ "node": "Respond to Preflight", "type": "main", "index": 0 }]] },
+    "Demo Webhook (from page)": { "main": [[{ "node": "Prepare Items", "type": "main", "index": 0 }]] },
+    "Every 6 Hours (Production)": { "main": [[{ "node": "Read Google Alerts RSS", "type": "main", "index": 0 }]] },
+    "Read Google Alerts RSS": { "main": [[{ "node": "Skip Already-Seen Items", "type": "main", "index": 0 }]] },
+    "Skip Already-Seen Items": { "main": [[{ "node": "Prepare Items", "type": "main", "index": 0 }]] },
+    "Prepare Items": { "main": [[{ "node": "Check with Jev", "type": "main", "index": 0 }]] },
+    "Check with Jev": { "main": [[{ "node": "Extract Prob", "type": "main", "index": 0 }]] },
+    "Extract Prob": { "main": [[{ "node": "Is Real Signal?", "type": "main", "index": 0 }]] },
+    "Is Real Signal?": {
+      "main": [
+        [{ "node": "Post to Slack", "type": "main", "index": 0 }],
+        [{ "node": "Merge", "type": "main", "index": 1 }]
+      ]
+    },
+    "Post to Slack": { "main": [[{ "node": "Merge", "type": "main", "index": 0 }]] },
+    "Merge": { "main": [[{ "node": "Build Response", "type": "main", "index": 0 }]] },
+    "Build Response": { "main": [[{ "node": "Respond to Page", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1", "saveManualExecutions": false, "saveExecutionProgress": false },
+  "pinData": {}
+}
