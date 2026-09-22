@@ -179,8 +179,7 @@
     },
     {
       "parameters": {
-        "mode": "combine",
-        "combineBy": "combineAll",
+        "mode": "append",
         "options": {}
       },
       "id": "merge-1",
@@ -243,11 +242,10 @@
     "Extract Prob": { "main": [[{ "node": "Is Real Signal?", "type": "main", "index": 0 }]] },
     "Is Real Signal?": {
       "main": [
-        [{ "node": "Post to Slack", "type": "main", "index": 0 }],
+        [{ "node": "Post to Slack", "type": "main", "index": 0 }, { "node": "Merge", "type": "main", "index": 0 }],
         [{ "node": "Merge", "type": "main", "index": 1 }]
       ]
     },
-    "Post to Slack": { "main": [[{ "node": "Merge", "type": "main", "index": 0 }]] },
     "Merge": { "main": [[{ "node": "Build Response", "type": "main", "index": 0 }]] },
     "Build Response": { "main": [[{ "node": "Respond to Page", "type": "main", "index": 0 }]] }
   },
